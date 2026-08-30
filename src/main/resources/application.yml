@@ -1,0 +1,24 @@
+server:
+  port: ${PORT:8097}
+
+spring:
+  application:
+    name: CAMPFIRE-RADAR-SERVICE
+
+  # Dedicated AirDrop Redis Connection
+  data:
+    redis:
+      host: ${AIRDROP_REDIS_HOST:localhost}
+      port: ${AIRDROP_REDIS_PORT:6379}
+      password: ${AIRDROP_REDIS_PASSWORD:}
+      timeout: 3000ms
+
+# OpenAI-Only Moderation Configuration
+moderation:
+  openai:
+    api-key: ${OPENAI_API_KEY}
+
+logging:
+  level:
+    root: INFO
+    com.AirDrop.Spherical: DEBUG
