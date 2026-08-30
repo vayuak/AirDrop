@@ -5,6 +5,8 @@ import com.AirDrop.Spherical.DTOs.NearbyPeerResponse;
 import com.AirDrop.Spherical.Services.CampfireRadarService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 
 import java.security.Principal;
@@ -23,9 +25,7 @@ public class CampfireRadarController {
             @RequestBody LocationPingRequest request,
             @RequestHeader(value = "X-Is-Premium", defaultValue = "false") boolean isPremium,
             Principal principal) {
-
         if (principal == null) return ResponseEntity.status(401).build();
-
         try {
             campfireService.postDrop(
                     principal.getName(),
@@ -45,25 +45,33 @@ public class CampfireRadarController {
     @PostMapping("/report/{targetUsername}")
     public ResponseEntity<?> reportUser(@PathVariable String targetUsername, Principal principal) {
         if (principal == null) return ResponseEntity.status(401).build();
-
         boolean success = campfireService.reportUser(principal.getName(), targetUsername);
         if (!success) {
             return ResponseEntity.badRequest().body(Map.of("message", "You have already reported this user."));
         }
-
         return ResponseEntity.ok(Map.of("message", "Report submitted."));
     }
 
     @GetMapping("/scan")
     public ResponseEntity<List<NearbyPeerResponse>> scanRadar(
+            @AuthenticationPrincipal UserDetails userDetails,
             @RequestParam double lat,
-            @RequestParam double lng,
-            Principal principal) {
-
-        if (principal == null) return ResponseEntity.status(401).build();
-
-        List<NearbyPeerResponse> peers = campfireService.scanNearbyPeers(principal.getName(), lat, lng);
-        return ResponseEntity.ok(peers);
+            @RequestParam double lng
+    ) {
+        String username = userDetails != null ? userDetails.getUsername() : "";
+        List<NearbyPeerResponse> drops = campfireService.scanNearbyPeers(username, lat, lng);
+        return ResponseEntity.ok(drops);
     }
 
+    @PostMapping("/ping-location")
+    public ResponseEntity<Void> updateLocation(
+            @AuthenticationPrincipal UserDetails userDetails,
+            @RequestParam double lat,
+            @RequestParam double lng
+    ) {
+        if (userDetails != null) {
+            campfireService.updateUserLocation(userDetails.getUsername(), lat, lng);
+        }
+        return ResponseEntity.ok().build();
+    }
 }
