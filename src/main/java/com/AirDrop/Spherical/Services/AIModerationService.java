@@ -22,14 +22,22 @@ public class AIModerationService {
     @Data
     public static class OpenAIModerationRequest {
         private String input;
-        public OpenAIModerationRequest(String input) { this.input = input; }
+        private String model;
+
+        public OpenAIModerationRequest(String input) {
+            this.input = input;
+            this.model = "omni-moderation-latest"; // 🟢 Explicitly target moderation model
+        }
     }
 
     @Data
     public static class OpenAIModerationResponse {
         private List<Result> results;
+
         @Data
-        public static class Result { private boolean flagged; }
+        public static class Result {
+            private boolean flagged;
+        }
     }
 
     public boolean isMessageSafe(String message) {
@@ -59,7 +67,7 @@ public class AIModerationService {
             }
         } catch (HttpClientErrorException.TooManyRequests e) {
             log.warn("⚠️ [OPENAI RATE LIMITED 429] Quota or Rate limit exceeded. Bypassing check for text: '{}'", message);
-            return true; // 🟢 Allow message through when OpenAI rate limits your account
+            return true; // 🟢 Bypass check when OpenAI rate limits/locks your account
         } catch (Exception e) {
             log.error("❌ [OPENAI MODERATION ERROR]: {}", e.getMessage());
         }
