@@ -1,13 +1,14 @@
 package com.AirDrop.Spherical.Services;
 
+import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 
 import java.util.List;
-import java.util.Map;
 
 @Service
 @Slf4j
@@ -18,45 +19,51 @@ public class AIModerationService {
     @Value("${moderation.openai.api-key}")
     private String openAiApiKey;
 
-    /**
-     * Checks text safety using OpenAI's free Moderation endpoint.
-     * Returns true if safe, false if flagged for hate, harassment, violence, or profanity.
-     */
+    @Data
+    public static class OpenAIModerationRequest {
+        private String input;
+        public OpenAIModerationRequest(String input) { this.input = input; }
+    }
+
+    @Data
+    public static class OpenAIModerationResponse {
+        private List<Result> results;
+        @Data
+        public static class Result { private boolean flagged; }
+    }
+
     public boolean isMessageSafe(String message) {
         if (message == null || message.isBlank()) return true;
 
-        boolean isSafe = checkOpenAI(message);
-
-        log.info("🛡️ [OPENAI MODERATION] Status: {} for text preview: '{}'",
-                isSafe ? "PASSED" : "BLOCKED",
-                message.length() > 20 ? message.substring(0, 20) + "..." : message);
-
-        return isSafe;
-    }
-
-    private boolean checkOpenAI(String text) {
         try {
             String url = "https://api.openai.com/v1/moderations";
 
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
-            headers.setBearerAuth(openAiApiKey);
+            headers.setBearerAuth(openAiApiKey.trim());
 
-            Map<String, Object> body = Map.of("input", text);
-            HttpEntity<Map<String, Object>> entity = new HttpEntity<>(body, headers);
+            OpenAIModerationRequest requestPayload = new OpenAIModerationRequest(message);
+            HttpEntity<OpenAIModerationRequest> entity = new HttpEntity<>(requestPayload, headers);
 
-            ResponseEntity<Map> response = restTemplate.postForEntity(url, entity, Map.class);
+            ResponseEntity<OpenAIModerationResponse> response = restTemplate.postForEntity(
+                    url, entity, OpenAIModerationResponse.class
+            );
 
             if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
-                List<Map<String, Object>> results = (List<Map<String, Object>>) response.getBody().get("results");
+                List<OpenAIModerationResponse.Result> results = response.getBody().getResults();
                 if (results != null && !results.isEmpty()) {
-                    Boolean flagged = (Boolean) results.get(0).get("flagged");
-                    return !Boolean.TRUE.equals(flagged); // Returns true if message is SAFE
+                    boolean isFlagged = results.get(0).isFlagged();
+                    log.info("🛡️ [OPENAI MODERATION] Text: '{}' | Flagged: {}", message, isFlagged);
+                    return !isFlagged;
                 }
             }
+        } catch (HttpClientErrorException.TooManyRequests e) {
+            log.warn("⚠️ [OPENAI RATE LIMITED 429] Quota or Rate limit exceeded. Bypassing check for text: '{}'", message);
+            return true; // 🟢 Allow message through when OpenAI rate limits your account
         } catch (Exception e) {
-            log.error("❌ [OPENAI MODERATION ERROR]:", e);
+            log.error("❌ [OPENAI MODERATION ERROR]: {}", e.getMessage());
         }
-        return false; // Fail-closed on API error to prevent unsafe leakage
+
+        return false; // Fail-closed for severe network failures
     }
 }
