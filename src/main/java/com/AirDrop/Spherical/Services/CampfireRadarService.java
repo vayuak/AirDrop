@@ -10,11 +10,6 @@ import org.springframework.data.redis.connection.RedisGeoCommands;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
-import org.springframework.data.geo.Distance;
-import org.springframework.data.geo.GeoResult;
-import org.springframework.data.geo.GeoResults;
-import org.springframework.data.geo.Point;
-
 import org.springframework.data.redis.domain.geo.GeoReference;
 import java.io.File;
 import java.io.FileInputStream;
@@ -25,6 +20,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -34,7 +30,10 @@ public class CampfireRadarService {
     private final StringRedisTemplate redisTemplate;
     private final AIModerationService aiModerationService;
 
+    // 🟢 Separated User Location Tracking from Actual Drops
     private static final String GEO_KEY = "campfire:radar:nodes";
+    private static final String GEO_DROPS_KEY = "campfire:radar:drops";
+
     private static final String DROP_PREFIX = "campfire:drop:";
     private static final String MSG_LIMIT_PREFIX = "campfire:limit:24h:";
     private static final String REPORT_COUNT_PREFIX = "campfire:mod:reports:count:";
@@ -53,9 +52,11 @@ public class CampfireRadarService {
         }
 
         if (!aiModerationService.isMessageSafe(message)) {
-            throw new IllegalArgumentException("Drop rejected: Content violates global safety guidelines (Abuse/Harassment/Profanity).");
+            throw new IllegalArgumentException("Drop rejected: Content violates global safety guidelines.");
         }
 
+        // 🟢 PREMIUM RESTRICTIONS TEMPORARILY DISABLED FOR TESTING
+        /*
         if (!isPremium) {
             String limitKey = MSG_LIMIT_PREFIX + cleanUser;
             String currentCountStr = redisTemplate.opsForValue().get(limitKey);
@@ -70,30 +71,36 @@ public class CampfireRadarService {
                 redisTemplate.expire(limitKey, Duration.ofHours(24));
             }
         }
-
-        redisTemplate.opsForGeo().add(GEO_KEY, new Point(lng, lat), cleanUser);
+        */
 
         if (message != null && !message.isBlank()) {
+            // 🟢 UUID FIX: Allows UNLIMITED simultaneous drops that don't overwrite each other
+            String dropId = UUID.randomUUID().toString();
+            String payload = cleanUser + "|||" + message.trim();
+
+            // Store coordinates under the unique Drop ID
+            redisTemplate.opsForGeo().add(GEO_DROPS_KEY, new Point(lng, lat), dropId);
+
+            // Store the actual message payload with a 10-minute TTL
             redisTemplate.opsForValue().set(
-                    DROP_PREFIX + cleanUser,
-                    message.trim(),
+                    DROP_PREFIX + dropId,
+                    payload,
                     Duration.ofMinutes(10)
             );
+            log.info("🔥 [CAMPFIRE DROP SUCCESS] @{} posted a drop. DropID: {}", cleanUser, dropId);
         }
-
-        log.info("🔥 [CAMPFIRE DROP SUCCESS] @{} posted a drop. (Premium: {})", cleanUser, isPremium);
     }
 
     public List<NearbyPeerResponse> scanNearbyPeers(String username, double lat, double lng) {
-        String activeUser = (username != null) ? username.trim().toLowerCase() : "";
         Point center = new Point(lng, lat);
 
         RedisGeoCommands.GeoSearchCommandArgs args = RedisGeoCommands.GeoSearchCommandArgs.newGeoSearchArgs()
                 .includeDistance()
                 .sortAscending();
 
+        // 🟢 SEARCH THE NEW DROPS GEO-INDEX
         GeoResults<RedisGeoCommands.GeoLocation<String>> results = redisTemplate.opsForGeo().search(
-                GEO_KEY,
+                GEO_DROPS_KEY,
                 GeoReference.fromCoordinate(center),
                 new Distance(BUFFER_RADIUS_METERS, RedisGeoCommands.DistanceUnit.METERS),
                 args
@@ -103,26 +110,31 @@ public class CampfireRadarService {
 
         if (results != null) {
             for (GeoResult<RedisGeoCommands.GeoLocation<String>> result : results) {
-                String peerName = result.getContent().getName();
-
-                if (isUserBlocked(peerName)) continue;
-
+                String dropId = result.getContent().getName();
                 double distanceMeters = result.getDistance().getValue();
 
                 if (distanceMeters > (PRIMARY_RADAR_RADIUS_METERS + 1.0)) {
                     continue;
                 }
 
-                String dropMsg = redisTemplate.opsForValue().get(DROP_PREFIX + peerName);
+                String payload = redisTemplate.opsForValue().get(DROP_PREFIX + dropId);
 
-                if (dropMsg != null && !dropMsg.isBlank()) {
+                // 🟢 UNPACK THE UUID PAYLOAD
+                if (payload != null && payload.contains("|||")) {
+                    String[] parts = payload.split("\\|\\|\\|", 2);
+                    String peerName = parts[0];
+                    String dropMsg = parts[1];
+
+                    if (isUserBlocked(peerName)) continue;
+
                     nearbyPeers.add(new NearbyPeerResponse(
                             peerName,
                             Math.round(distanceMeters * 10.0) / 10.0,
                             dropMsg
                     ));
                 } else {
-                    redisTemplate.opsForZSet().remove(GEO_KEY, peerName);
+                    // Clean up ghosts (TTL expired but coordinates remained)
+                    redisTemplate.opsForZSet().remove(GEO_DROPS_KEY, dropId);
                 }
             }
         }
@@ -140,7 +152,7 @@ public class CampfireRadarService {
         String reportSetKey = REPORT_SET_PREFIX + target;
         Boolean alreadyReported = redisTemplate.opsForSet().isMember(reportSetKey, reporterUser);
         if (Boolean.TRUE.equals(alreadyReported)) {
-            return false;
+            return false; // Already reported by this user
         }
 
         redisTemplate.opsForSet().add(reportSetKey, reporterUser);
@@ -162,6 +174,7 @@ public class CampfireRadarService {
     public void updateUserLocation(String username, double lat, double lng) {
         String cleanUser = username.trim().toLowerCase();
         if (!isUserBlocked(cleanUser)) {
+            // Live tracking (separate from drops)
             redisTemplate.opsForGeo().add(GEO_KEY, new Point(lng, lat), cleanUser);
         }
     }
@@ -169,7 +182,7 @@ public class CampfireRadarService {
     private synchronized void blockUserAndExportToExcel(String username, String reason) {
         redisTemplate.opsForSet().add(BLOCKED_SET_KEY, username);
         redisTemplate.opsForGeo().remove(GEO_KEY, username);
-        redisTemplate.delete(DROP_PREFIX + username);
+        redisTemplate.opsForGeo().remove(GEO_DROPS_KEY, username);
 
         log.error("⛔ [AUTO-BLOCK TRIGGERED] @{} blocked. Logging to Excel...", username);
 
