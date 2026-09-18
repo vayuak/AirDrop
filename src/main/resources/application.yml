@@ -1,22 +1,62 @@
 server:
   port: ${PORT:8097}
 
+  # ========================================================
+  # ⚡ 2G/3G NETWORK OPTIMIZATION ENGINE (GZIP COMPRESSION)
+  # ========================================================
+  compression:
+    enabled: true
+    mime-types: application/json,text/html,text/xml,text/plain
+    min-response-size: 1024
+
 spring:
   application:
-    name: CAMPFIRE-RADAR-SERVICE
+    name: SPHERICAL-SERVICE
+  main:
+    allow-bean-definition-overriding: true
 
-  # Dedicated AirDrop Redis Connection
+  # ========================================================
+  # 📥 LIVE DISTRIBUTED MEMORY STORAGE: REDIS (RAILWAY READY)
+  # ========================================================
   data:
     redis:
-      host: ${AIRDROP_REDIS_HOST:localhost}
-      port: ${AIRDROP_REDIS_PORT:6379}
-      password: ${AIRDROP_REDIS_PASSWORD:}
-      timeout: 3000ms
+      host: ${SPRING_REDIS_HOST:localhost}
+      port: ${SPRING_REDIS_PORT:6379}
+      password: ${SPRING_REDIS_PASSWORD:}
+      timeout: 5000ms
 
-# OpenAI-Only Moderation Configuration
+# ========================================================
+# 🛡️ SECURITY HANDSHAKE TOKENS (RAILWAY READY)
+# ========================================================
+ghost:
+  shield:
+    key: ${GHOST_SHIELD_KEY:default_shield_key}
+    jwt-secret: ${JWT_SECRET:default_jwt_secret}
+  gateway:
+    secret: ${GHOST_GATEWAY_SECRET:default_gateway_secret}
+
+# ========================================================
+# 🗺️ SERVICE REGISTRY MAPPING ENGINE
+# ========================================================
+eureka:
+  client:
+    enabled: false
+    register-with-eureka: false
+    fetch-registry: false
+
+# Direct microservice routing matching SOCIAL-SERVICE standards
+user:
+  catalog:
+    service:
+      name: ${USER_CATALOG_SERVICE_NAME:USER-CATALOG-SERVICE}
+      url: ${USER_SERVICE_URL:https://usercatalog-production-2fcc.up.railway.app}
+
+# ========================================================
+# 🤖 MODERATION PIPELINE
+# ========================================================
 moderation:
   openai:
-    api-key: ${OPENAI_API_KEY}
+    api-key: ${OPENAI_API_KEY:mock_key}
 
 logging:
   level:

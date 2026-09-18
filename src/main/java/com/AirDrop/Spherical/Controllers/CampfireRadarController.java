@@ -74,4 +74,9 @@ public class CampfireRadarController {
         }
         return ResponseEntity.ok().build();
     }
+    @PostMapping("/report/{reportedUsername}")
+    public ResponseEntity<?> reportUser(@PathVariable String reportedUsername, @RequestAttribute("username") String reporterUsername) {
+        campfireService.reportUser(reporterUsername, reportedUsername);
+        return ResponseEntity.ok().build();
+    }
 }
