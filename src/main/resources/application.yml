@@ -1,9 +1,5 @@
 server:
-  port: ${PORT:8097}
-
-  # ========================================================
-  # ⚡ 2G/3G NETWORK OPTIMIZATION ENGINE (GZIP COMPRESSION)
-  # ========================================================
+  port: ${PORT}
   compression:
     enabled: true
     mime-types: application/json,text/html,text/xml,text/plain
@@ -14,49 +10,35 @@ spring:
     name: SPHERICAL-SERVICE
   main:
     allow-bean-definition-overriding: true
-
-  # ========================================================
-  # 📥 LIVE DISTRIBUTED MEMORY STORAGE: REDIS (RAILWAY READY)
-  # ========================================================
   data:
     redis:
-      host: ${SPRING_REDIS_HOST:localhost}
-      port: ${SPRING_REDIS_PORT:6379}
-      password: ${SPRING_REDIS_PASSWORD:}
+      host: ${SPRING_REDIS_HOST}
+      port: ${SPRING_REDIS_PORT}
+      password: ${SPRING_REDIS_PASSWORD}
       timeout: 5000ms
 
-# ========================================================
-# 🛡️ SECURITY HANDSHAKE TOKENS (RAILWAY READY)
-# ========================================================
 ghost:
   shield:
-    key: ${GHOST_SHIELD_KEY:default_shield_key}
-    jwt-secret: ${JWT_SECRET:default_jwt_secret}
+    key: ${GHOST_SHIELD_KEY}
+    jwt-secret: ${JWT_SECRET}
   gateway:
-    secret: ${GHOST_GATEWAY_SECRET:default_gateway_secret}
+    secret: ${GHOST_GATEWAY_SECRET}
 
-# ========================================================
-# 🗺️ SERVICE REGISTRY MAPPING ENGINE
-# ========================================================
 eureka:
   client:
     enabled: false
     register-with-eureka: false
     fetch-registry: false
 
-# Direct microservice routing matching SOCIAL-SERVICE standards
 user:
   catalog:
     service:
-      name: ${USER_CATALOG_SERVICE_NAME:USER-CATALOG-SERVICE}
-      url: ${USER_SERVICE_URL:https://usercatalog-production-2fcc.up.railway.app}
+      name: ${USER_CATALOG_SERVICE_NAME}
+      url: ${USER_SERVICE_URL}
 
-# ========================================================
-# 🤖 MODERATION PIPELINE
-# ========================================================
 moderation:
   openai:
-    api-key: ${OPENAI_API_KEY:mock_key}
+    api-key: ${OPENAI_API_KEY}
 
 logging:
   level:
