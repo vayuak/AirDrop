@@ -24,12 +24,6 @@ ghost:
   gateway:
     secret: ${GHOST_GATEWAY_SECRET}
 
-eureka:
-  client:
-    enabled: false
-    register-with-eureka: false
-    fetch-registry: false
-
 user:
   catalog:
     service:

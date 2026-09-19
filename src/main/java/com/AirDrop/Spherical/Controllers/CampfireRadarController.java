@@ -8,7 +8,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
-
 import java.security.Principal;
 import java.util.List;
 import java.util.Map;
@@ -72,11 +71,6 @@ public class CampfireRadarController {
         if (userDetails != null) {
             campfireService.updateUserLocation(userDetails.getUsername(), lat, lng);
         }
-        return ResponseEntity.ok().build();
-    }
-    @PostMapping("/report/{reportedUsername}")
-    public ResponseEntity<?> reportUser(@PathVariable String reportedUsername, @RequestAttribute("username") String reporterUsername) {
-        campfireService.reportUser(reporterUsername, reportedUsername);
         return ResponseEntity.ok().build();
     }
 }
