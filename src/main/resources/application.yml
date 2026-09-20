@@ -28,7 +28,7 @@ user:
   catalog:
     service:
       name: ${USER_CATALOG_SERVICE_NAME}
-      url: ${USER_SERVICE_URL}
+      url: ${USER_CATALOG_SERVICE_URL}
 
 moderation:
   openai:

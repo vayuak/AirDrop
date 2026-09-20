@@ -8,7 +8,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @EnableAsync
 @SpringBootApplication
 @EnableScheduling
-@EnableFeignClients
+@EnableFeignClients(basePackages = "com.AirDrop.Spherical.Clients")
 public class SphericalApplication {
 
 	public static void main(String[] args) {
