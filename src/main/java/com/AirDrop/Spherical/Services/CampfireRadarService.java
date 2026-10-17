@@ -28,9 +28,8 @@ public class CampfireRadarService {
 
     private final StringRedisTemplate redisTemplate;
     private final AIModerationService aiModerationService;
-    private final UserCatalogClient userCatalogClient; // 🛡️ Replaced RestTemplate with secure Feign Client
+    private final UserCatalogClient userCatalogClient;
 
-    // Geo-Spatial & Moderation Keys
     private static final String GEO_KEY = "campfire:radar:nodes";
     private static final String GEO_DROPS_KEY = "campfire:radar:drops";
     private static final String DROP_PREFIX = "campfire:drop:";
@@ -40,12 +39,10 @@ public class CampfireRadarService {
     private static final String REPORT_SET_PREFIX = "campfire:mod:reports:users:";
     public static final String BLOCKED_SET_KEY = "campfire:mod:blocked:users";
 
-    private static final double PRIMARY_RADAR_RADIUS_METERS = 50.0;
-    private static final double BUFFER_RADIUS_METERS = 60.0;
+    // 🟢 100m core detection + 27m GPS variance buffer (127m scan)
+    private static final double PRIMARY_RADAR_RADIUS_METERS = 100.0;
+    private static final double BUFFER_RADIUS_METERS = 127.0;
 
-    /**
-     * POST DROP: Compresses text, instant response for 2G, AI runs in the background.
-     */
     public void postDrop(String username, double lat, double lng, String message, boolean isPremium) {
         String cleanUser = username.trim().toLowerCase();
 
@@ -53,7 +50,6 @@ public class CampfireRadarService {
             throw new IllegalStateException("Your account is blocked.");
         }
 
-        // 10-Drop Daily Limit for Free Users
         if (!isPremium) {
             String today = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE);
             String limitKey = "campfire:limit:" + today + ":" + cleanUser;
@@ -70,12 +66,10 @@ public class CampfireRadarService {
             }
         }
 
-        // Instant Post with Compression
         if (message != null && !message.isBlank()) {
             String dropId = UUID.randomUUID().toString();
             String rawMessage = message.trim();
 
-            // 🗜️ COMPRESS: Shrink the text before it hits Redis
             String compressedMsg = CompressionUtil.compress(rawMessage);
             String payload = cleanUser + "|||" + compressedMsg;
 
@@ -83,15 +77,10 @@ public class CampfireRadarService {
             redisTemplate.opsForValue().set(DROP_PREFIX + dropId, payload, Duration.ofMinutes(10));
 
             log.info("🔥 [DROP INSTANT] @{} posted a compressed drop. DropID: {}", cleanUser, dropId);
-
-            // 🤖 AI CHECK: We pass the RAW message to the AI so it can actually read it
             verifyContentAsync(dropId, cleanUser, rawMessage);
         }
     }
 
-    /**
-     * ASYNC AI MODERATION
-     */
     @Async
     protected void verifyContentAsync(String dropId, String username, String rawMessage) {
         if (!aiModerationService.isMessageSafe(rawMessage)) {
@@ -102,13 +91,11 @@ public class CampfireRadarService {
         }
     }
 
-    /**
-     * RADAR SCAN: Decompresses payloads on the fly
-     */
     public List<NearbyPeerResponse> scanNearbyPeers(String username, double lat, double lng) {
         Point center = new Point(lng, lat);
         GeoResults<RedisGeoCommands.GeoLocation<String>> results = redisTemplate.opsForGeo().search(
                 GEO_DROPS_KEY, GeoReference.fromCoordinate(center),
+                // Query scans entire 127m buffer
                 new Distance(BUFFER_RADIUS_METERS, RedisGeoCommands.DistanceUnit.METERS),
                 RedisGeoCommands.GeoSearchCommandArgs.newGeoSearchArgs().includeDistance().sortAscending()
         );
@@ -118,6 +105,7 @@ public class CampfireRadarService {
             for (GeoResult<RedisGeoCommands.GeoLocation<String>> result : results) {
                 String dropId = result.getContent().getName();
                 double distanceMeters = result.getDistance().getValue();
+                // Hard filter enforces the 100m strict boundary
                 if (distanceMeters > PRIMARY_RADAR_RADIUS_METERS) continue;
 
                 String payload = redisTemplate.opsForValue().get(DROP_PREFIX + dropId);
@@ -127,7 +115,6 @@ public class CampfireRadarService {
                     String compressedMsg = parts[1];
 
                     if (!isUserBlocked(peerUsername)) {
-                        // 🔓 DECOMPRESS: Restore the text before sending to the phone
                         String rawMsg = CompressionUtil.decompress(compressedMsg);
                         nearbyPeers.add(new NearbyPeerResponse(peerUsername, Math.round(distanceMeters * 10.0) / 10.0, rawMsg));
                     }
@@ -139,9 +126,6 @@ public class CampfireRadarService {
         return nearbyPeers;
     }
 
-    /**
-     * UPDATE LOCATION
-     */
     public void updateUserLocation(String username, double lat, double lng) {
         String cleanUser = username.trim().toLowerCase();
         if (!isUserBlocked(cleanUser)) {
@@ -155,7 +139,7 @@ public class CampfireRadarService {
      */
     @Scheduled(fixedRate = 900000)
     public void cleanupGhostLocations() {
-        long thirtyMinutesAgo = System.currentTimeMillis() - (30 * 60 * 1000);
+        long thirtyMinutesAgo = System.currentTimeMillis() - (30L * 60L * 1000L);
         var staleUsers = redisTemplate.opsForZSet().rangeByScore(LAST_PING_ZSET, 0, thirtyMinutesAgo);
 
         if (staleUsers != null && !staleUsers.isEmpty()) {
