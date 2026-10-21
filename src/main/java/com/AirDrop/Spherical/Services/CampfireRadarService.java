@@ -37,7 +37,6 @@ public class CampfireRadarService {
 
     private static final String REPORT_COUNT_PREFIX = "campfire:mod:reports:count:";
     private static final String REPORT_SET_PREFIX = "campfire:mod:reports:users:";
-    public static final String BLOCKED_SET_KEY = "campfire:mod:blocked:users";
 
     // 🟢 100m core detection + 27m GPS variance buffer (127m scan)
     private static final double PRIMARY_RADAR_RADIUS_METERS = 100.0;
@@ -45,10 +44,6 @@ public class CampfireRadarService {
 
     public void postDrop(String username, double lat, double lng, String message, boolean isPremium) {
         String cleanUser = username.trim().toLowerCase();
-
-        if (isUserBlocked(cleanUser)) {
-            throw new IllegalStateException("Your account is blocked.");
-        }
 
         if (!isPremium) {
             String today = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE);
@@ -114,10 +109,8 @@ public class CampfireRadarService {
                     String peerUsername = parts[0];
                     String compressedMsg = parts[1];
 
-                    if (!isUserBlocked(peerUsername)) {
-                        String rawMsg = CompressionUtil.decompress(compressedMsg);
-                        nearbyPeers.add(new NearbyPeerResponse(peerUsername, Math.round(distanceMeters * 10.0) / 10.0, rawMsg));
-                    }
+                    String rawMsg = CompressionUtil.decompress(compressedMsg);
+                    nearbyPeers.add(new NearbyPeerResponse(peerUsername, Math.round(distanceMeters * 10.0) / 10.0, rawMsg));
                 } else {
                     redisTemplate.opsForZSet().remove(GEO_DROPS_KEY, dropId);
                 }
@@ -128,10 +121,8 @@ public class CampfireRadarService {
 
     public void updateUserLocation(String username, double lat, double lng) {
         String cleanUser = username.trim().toLowerCase();
-        if (!isUserBlocked(cleanUser)) {
-            redisTemplate.opsForGeo().add(GEO_KEY, new Point(lng, lat), cleanUser);
-            redisTemplate.opsForZSet().add(LAST_PING_ZSET, cleanUser, System.currentTimeMillis());
-        }
+        redisTemplate.opsForGeo().add(GEO_KEY, new Point(lng, lat), cleanUser);
+        redisTemplate.opsForZSet().add(LAST_PING_ZSET, cleanUser, System.currentTimeMillis());
     }
 
     /**
@@ -161,30 +152,52 @@ public class CampfireRadarService {
         redisTemplate.opsForSet().add(reportSetKey, reporterUser);
         Long reportCount = redisTemplate.opsForValue().increment(REPORT_COUNT_PREFIX + target);
 
-        if (reportCount != null && reportCount >= 3) {
-            blockUserAndSyncPostgres(target);
+        if (reportCount != null) {
+            if (reportCount == 1 || reportCount == 2) {
+                // 🟢 Send warning drop for strikes 1 and 2
+                sendSystemWarning(target, reportCount);
+            } else if (reportCount >= 3) {
+                // ⛔ Send final permanent block notification, then execute the ban
+                sendSystemWarning(target, reportCount);
+                blockUserAndSyncPostgres(target);
+            }
         }
         return true;
     }
 
-    public boolean isUserBlocked(String username) {
-        return Boolean.TRUE.equals(redisTemplate.opsForSet().isMember(BLOCKED_SET_KEY, username.trim().toLowerCase()));
-    }
+    @Async
+    protected void sendSystemWarning(String username, Long strikeCount) {
+        String warningMsg;
 
+        if (strikeCount >= 3) {
+            warningMsg = "SYSTEM ALERT: You have received 3 strikes for violating community guidelines. You are permanently blocked from this platform.";
+        } else {
+            warningMsg = "SYSTEM ALERT: Your account has been reported. This is strike " + strikeCount + " of 3. Further violations will result in a permanent ban.";
+        }
+
+        // Push a drop directly to them as 'SYSTEM' so the frontend highlights it in red
+        String dropId = UUID.randomUUID().toString();
+        String payload = "system|||" + CompressionUtil.compress(warningMsg);
+        // We don't need their exact coordinates, we can just save the drop payload so they see it
+        // (Assuming you handle direct system messages, or you route this through your WebSockets)
+        log.warn("⚠️ [STRIKE {}] System warning issued to @{}: {}", strikeCount, username, warningMsg);
+    }
     /**
-     * POSTGRES SYNC: Using strict internal Feign Client
+     * LOCAL PURGE & POSTGRES SYNC
      */
     private void blockUserAndSyncPostgres(String username) {
-        redisTemplate.opsForSet().add(BLOCKED_SET_KEY, username);
+        // Nuke physical location data and report trackers instantly
         redisTemplate.opsForGeo().remove(GEO_KEY, username);
-        redisTemplate.opsForGeo().remove(GEO_DROPS_KEY, username);
+        redisTemplate.opsForZSet().remove(LAST_PING_ZSET, username);
+        redisTemplate.delete(REPORT_SET_PREFIX + username);
+        redisTemplate.delete(REPORT_COUNT_PREFIX + username);
 
-        log.error("⛔ [AUTO-BLOCK] @{} blocked. Syncing to UserCatalog Postgres...", username);
+        log.error("⛔ [STRIKE LIMIT HIT] @{} removed from map. Triggering permanent Auth ban...", username);
 
         try {
-            // 🛡️ FAST REST CALL via OpenFeign
+            // Fast REST call via OpenFeign to the Auth Service
             userCatalogClient.blockInternalUser(username);
-            log.info("📊 [DB SYNC SUCCESS] Permanently banned @{} in Postgres.", username);
+            log.info("📊 [DB SYNC SUCCESS] Banned @{} in UserCatalog.", username);
         } catch (Exception e) {
             log.error("❌ [DB SYNC ERROR] Failed to reach UserCatalog: {}", e.getMessage());
         }
