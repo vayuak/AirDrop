@@ -37,4 +37,4 @@ moderation:
 logging:
   level:
     root: INFO
-    com.AirDrop.Spherical: DEBUG
+    com.AirDrop.Spherical: INFO

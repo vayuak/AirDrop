@@ -29,6 +29,7 @@ public class CampfireRadarService {
     private final StringRedisTemplate redisTemplate;
     private final AIModerationService aiModerationService;
     private final UserCatalogClient userCatalogClient;
+    private final FirebasePushService firebasePushService;
 
     private static final String GEO_KEY = "campfire:radar:nodes";
     private static final String GEO_DROPS_KEY = "campfire:radar:drops";
@@ -38,12 +39,19 @@ public class CampfireRadarService {
     private static final String REPORT_COUNT_PREFIX = "campfire:mod:reports:count:";
     private static final String REPORT_SET_PREFIX = "campfire:mod:reports:users:";
 
-    // 🟢 100m core detection + 27m GPS variance buffer (127m scan)
     private static final double PRIMARY_RADAR_RADIUS_METERS = 100.0;
     private static final double BUFFER_RADIUS_METERS = 127.0;
 
     public void postDrop(String username, double lat, double lng, String message, boolean isPremium) {
         String cleanUser = username.trim().toLowerCase();
+
+        if (message != null && message.length() > 150) {
+            throw new IllegalArgumentException("Message too long (max 150 characters).");
+        }
+        String blocked = com.AirDrop.Spherical.Utilities.PromoFilter.check(message);
+        if (blocked != null) {
+            throw new IllegalArgumentException(blocked);   // rejected BEFORE it counts against the daily limit or goes live
+        }
 
         if (!isPremium) {
             String today = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE);
@@ -90,7 +98,6 @@ public class CampfireRadarService {
         Point center = new Point(lng, lat);
         GeoResults<RedisGeoCommands.GeoLocation<String>> results = redisTemplate.opsForGeo().search(
                 GEO_DROPS_KEY, GeoReference.fromCoordinate(center),
-                // Query scans entire 127m buffer
                 new Distance(BUFFER_RADIUS_METERS, RedisGeoCommands.DistanceUnit.METERS),
                 RedisGeoCommands.GeoSearchCommandArgs.newGeoSearchArgs().includeDistance().sortAscending()
         );
@@ -100,7 +107,6 @@ public class CampfireRadarService {
             for (GeoResult<RedisGeoCommands.GeoLocation<String>> result : results) {
                 String dropId = result.getContent().getName();
                 double distanceMeters = result.getDistance().getValue();
-                // Hard filter enforces the 100m strict boundary
                 if (distanceMeters > PRIMARY_RADAR_RADIUS_METERS) continue;
 
                 String payload = redisTemplate.opsForValue().get(DROP_PREFIX + dropId);
@@ -125,9 +131,6 @@ public class CampfireRadarService {
         redisTemplate.opsForZSet().add(LAST_PING_ZSET, cleanUser, System.currentTimeMillis());
     }
 
-    /**
-     * SCHEDULED CLEANUP
-     */
     @Scheduled(fixedRate = 900000)
     public void cleanupGhostLocations() {
         long thirtyMinutesAgo = System.currentTimeMillis() - (30L * 60L * 1000L);
@@ -154,10 +157,8 @@ public class CampfireRadarService {
 
         if (reportCount != null) {
             if (reportCount == 1 || reportCount == 2) {
-                // 🟢 Send warning drop for strikes 1 and 2
                 sendSystemWarning(target, reportCount);
             } else if (reportCount >= 3) {
-                // ⛔ Send final permanent block notification, then execute the ban
                 sendSystemWarning(target, reportCount);
                 blockUserAndSyncPostgres(target);
             }
@@ -175,18 +176,12 @@ public class CampfireRadarService {
             warningMsg = "SYSTEM ALERT: Your account has been reported. This is strike " + strikeCount + " of 3. Further violations will result in a permanent ban.";
         }
 
-        // Push a drop directly to them as 'SYSTEM' so the frontend highlights it in red
         String dropId = UUID.randomUUID().toString();
         String payload = "system|||" + CompressionUtil.compress(warningMsg);
-        // We don't need their exact coordinates, we can just save the drop payload so they see it
-        // (Assuming you handle direct system messages, or you route this through your WebSockets)
         log.warn("⚠️ [STRIKE {}] System warning issued to @{}: {}", strikeCount, username, warningMsg);
     }
-    /**
-     * LOCAL PURGE & POSTGRES SYNC
-     */
+
     private void blockUserAndSyncPostgres(String username) {
-        // Nuke physical location data and report trackers instantly
         redisTemplate.opsForGeo().remove(GEO_KEY, username);
         redisTemplate.opsForZSet().remove(LAST_PING_ZSET, username);
         redisTemplate.delete(REPORT_SET_PREFIX + username);
@@ -195,11 +190,30 @@ public class CampfireRadarService {
         log.error("⛔ [STRIKE LIMIT HIT] @{} removed from map. Triggering permanent Auth ban...", username);
 
         try {
-            // Fast REST call via OpenFeign to the Auth Service
             userCatalogClient.blockInternalUser(username);
             log.info("📊 [DB SYNC SUCCESS] Banned @{} in UserCatalog.", username);
         } catch (Exception e) {
             log.error("❌ [DB SYNC ERROR] Failed to reach UserCatalog: {}", e.getMessage());
+        }
+    }
+
+    @Async
+    public void notifyScannedPeers(List<NearbyPeerResponse> nearbyUsers, String scannerUsername) {
+        for (NearbyPeerResponse peer : nearbyUsers) {
+            try {
+                String token = userCatalogClient.fetchTokenFromUserCatalog(peer.getUsername());
+
+                if (token != null && !token.isBlank()) {
+                    // 🟢 USE THE INSTANCE VARIABLE (lowercase `firebasePushService`)
+                    firebasePushService.wakeUpUser(
+                            token,
+                            "Campfire Radar",
+                            "📍 " + scannerUsername + " is scanning nearby. Drop a ping to connect!"
+                    );
+                }
+            } catch (Exception e) {
+                // Ignore missing tokens or timeouts
+            }
         }
     }
 }

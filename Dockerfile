@@ -21,4 +21,4 @@ COPY --from=build /app/target/*.jar app.jar
 EXPOSE 8080
 
 # Relaxed JVM heap limit for smooth local performance
-ENTRYPOINT ["java", "-Xmx512m", "-jar", "app.jar"]
+ENTRYPOINT ["sh","-c","exec java $JAVA_OPTS -jar app.jar"]

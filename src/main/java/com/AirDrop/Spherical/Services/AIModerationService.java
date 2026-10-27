@@ -32,9 +32,8 @@ public class AIModerationService {
     }
 
     public boolean isMessageSafe(String message) {
-        // 🟢 DEV OVERRIDE: Unconditionally allow all messages to pass
-        log.debug("  [DEV MODE] External AI Moderation container bypassed for text: '{}'", message);
-        return true;
+        // Rule-based moderation (links, phone numbers, adverts). No external AI container is required for the MVP.
+        return com.AirDrop.Spherical.Utilities.PromoFilter.check(message) == null;
 
         /*
         // 🔴 WHEN YOUR AI CONTAINER IS READY, UNCOMMENT THIS BLOCK:
